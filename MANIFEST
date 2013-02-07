@@ -1,0 +1,12 @@
+ChangeLog.md
+MANIFEST
+Makefile.PL
+README
+TODO
+test.pl
+svm-train.pl
+svm-predict.pl
+svm-scale.pl
+lib/ML/SVM.pm
+lib/ML/SVM/Model.pm
+lib/ML/SVM/Scale.pm
