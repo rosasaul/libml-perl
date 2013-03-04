@@ -21,7 +21,7 @@ sub new {
   my $class = shift;
   my %config;
   if(@_){
-    my $config_ref = shift;
+    my $config_ref = $_[0];
     foreach my $item (keys %$config_ref){ $config{$item} = $$config_ref{$item}; }
   }
   my $self = \%config;
@@ -38,7 +38,7 @@ sub new {
     # Should do at least 2 threads if all else fails
     if($self->{'maxthreads'} < 2){ $self->{'maxthreads'} = 2; }
   }
-  if($config{'threads'} and !defined($self->{'thrTune'})){ $self->{'thrTune'} = 1440000; }
+  if($config{'threads'} and !defined($self->{'thrTune'})){ $self->{'thrTune'} = 4500; }
   $self->initCoef;
   return $self;
 }
@@ -1727,10 +1727,78 @@ sub add_vector {
 }
 
 sub predictFile {
-  my ($self,$out,$test_file,$model) = @_;
+  my ($self,$out,$file,$model) = @_;
   my $correct = 0; my $count = 0;
-  open IN, '<'.$test_file or die "Unable to open test_file $test_file.\n";
-  while(my $line = <IN>){ chomp($line);
+  if(!(-e $file)){ die "File $file does not exist.\n"; }
+  my $result = join(' ',`file "$file"`);
+  my $fh;
+  if($result =~ /bzip2/){
+    use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error) ;
+    $fh = new IO::Uncompress::Bunzip2 $file or die "bunzip2 failed: $Bunzip2Error\n";
+  }
+  elsif($result =~ /gzip/){
+    use IO::Uncompress::Gunzip qw(gunzip $GunzipError) ;
+    $fh = new IO::Uncompress::Gunzip $file or die "Gunzip failed: $GunzipError\n";
+  }
+  elsif($result =~ /ASCII/){
+    open $fh, "<".$file or die "Unable to open test_file $file.\n";
+  }
+  else{ die "Unhandled log type $result from $file"; }
+  if($self->{'threads'}){
+    my @threads;
+    my @dump;
+    while(my $line = <$fh>){ chomp($line);
+      if(!defined($self->{'dumpsize'})){
+        my @items = split(/\s+/,$line);
+        $self->{'dumpsize'} = int($self->{'thrTune'} / @items);
+      }
+      if(@dump < $self->{'dumpsize'}){ push @dump, $line; }
+      else{
+        if(@threads > $self->{'maxthreads'}){
+          my $thread = shift @threads;
+          print $out $thread->join();
+        }
+        push @threads, threads->create('_predict_thr',$self,$model,@dump);
+        @dump = ();
+        push @dump, $line;
+      }
+    }
+    if(@dump){
+      if(@threads > $self->{'maxthreads'}){
+        my $thread = shift @threads;
+        print $out $thread->join();
+      }
+      push @threads, threads->create('_predict_thr',$self,$model,@dump);
+    }
+    foreach my $thread (@threads){
+      print $out $thread->join();
+    }
+  }
+  else{
+    while(my $line = <$fh>){ chomp($line);
+      my @items = split(/\s+/,$line);
+      my $y = shift;
+      my %xSet;
+      foreach my $item (@items){
+        if($item =~ /(\d+):(\S+)/){
+          my $x = 1 * $1; my $val = 1 * $2;
+          $xSet{$x} = $val;
+        }
+      }
+      my @dec_values;
+      my $y_predict = $self->predict($model,\%xSet,\@dec_values);
+      print $out $y_predict."\n";
+    }
+  }
+  close $fh;
+}
+
+sub _predict_thr {
+  my $self = shift;
+  my $model = shift;
+  my @lines = @_;
+  my $return;
+  foreach my $line (@lines){
     my @items = split(/\s+/,$line);
     my $y = shift;
     my %xSet;
@@ -1741,9 +1809,9 @@ sub predictFile {
       }
     }
     my @dec_values;
-    my $y_predict = $self->predict($model,\%xSet,\@dec_values);
-    print $out $y_predict."\n";
+    $return .= $self->predict($model,\%xSet,\@dec_values)."\n";
   }
+  return $return;
 }
 
 sub predict {

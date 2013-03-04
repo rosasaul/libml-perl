@@ -95,7 +95,7 @@ sub loadFile {
     $fh = new IO::Uncompress::Gunzip $file or die "Gunzip failed: $GunzipError\n";
   }
   elsif($result =~ /ASCII/){
-    open $fh, "<".$file or die "Couldn't open log $file.\n";
+    open $fh, "<".$file or die "Unable to open model_file $file.\n";
   }
   else{ die "Unhandled log type $result from $file"; }
   while(<$fh>){ chomp;
