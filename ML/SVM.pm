@@ -5,23 +5,25 @@
 
 package Algorithm::ML::SVM;
 
-our $VERSION = '0';
-my $REVISIONS = '
-0 Initial File
-';
+use strict;
+#use warnings;
 
 BEGIN{unshift @INC,"/home/srosa/perl" if caller;} #Adding local dir
 
-use strict;
 use Math::Trig;
 use Algorithm::ML::SVM::Model;
 use threads;
 
+our $VERSION = '1';
+my $REVISIONS = '
+0 Initial File
+1 Updated to threading in train()
+';
+
 sub new {
-  my $class = shift;
+  my ($class,$config_ref) = @_;
   my %config;
-  if(@_){
-    my $config_ref = $_[0];
+  if($config_ref){
     foreach my $item (keys %$config_ref){ $config{$item} = $$config_ref{$item}; }
   }
   my $self = \%config;
@@ -43,28 +45,13 @@ sub new {
   return $self;
 }
 
-sub set_cost {
-  my ($self,$cost) = @_;
-  $self->{'cost'} = $cost;
-}
-
-sub set_nu {
-  my ($self,$nu) = @_;
-  $self->{'nu'} = $nu;
-}
-
-sub set_epsilon_svr {
-  my ($self,$epsilon_svr) = @_;
-  $self->{'epsilon_svr'} = $epsilon_svr;
-}
-
-sub set_epsilon_trm {
-  my ($self,$epsilon_trm) = @_;
-  $self->{'epsilon_trm'} = $epsilon_trm;
-}
+sub set_cost { my ($self,$cost) = @_; $self->{'cost'} = $cost; }
+sub set_nu { my ($self,$nu) = @_; $self->{'nu'} = $nu; }
+sub set_epsilon_svr { my ($self,$epsilon_svr) = @_; $self->{'epsilon_svr'} = $epsilon_svr; }
+sub set_epsilon_trm { my ($self,$epsilon_trm) = @_; $self->{'epsilon_trm'} = $epsilon_trm; }
 
 sub train {
-  my ($self,$model) = @_;
+  my ($self,$model,$save_file) = @_;
 #  $self->loger("Starting Trainer");
   if($model->svm_type eq 'one_class' or
     $model->svm_type eq 'epsilon_svr' or
@@ -80,13 +67,30 @@ sub train {
 #    $self->loger("Train One");
     my @alpha = $self->train_one($model);
     my $vector = 0;
+    my $fh;
+    if($save_file){
+      use IO::Compress::Bzip2 qw(bzip2 $Bzip2Error);
+      if(!($save_file =~ /\.bz2$/)){ $save_file .= '.bz2'; } # Add the bz2 end if not already
+      $fh = new IO::Compress::Bzip2 $save_file or die "bunzip2 failed: $Bzip2Error\n";
+    }
     for(my $i = 0; $i < $self->{'problem'}{'count'}; $i++){
       if(abs($alpha[$i]) > 0){
         $model->{'SV'}[$vector] = $self->{'problem'}{'x'}[$i];
         $model->set_sv_coef($vector,0,$alpha[$i]);
         $vector++;
+        if($save_file){
+          my @items;
+          push @items, $self->{'problem'}{'y'}[$i];
+          my @indexes = keys %{ $self->{'problem'}{'x'}[$i] };
+          @indexes = sort {$a <=> $b} @indexes;
+          foreach my $index (@indexes){
+            push @items, $index.':'.$self->{'problem'}{'x'}[$i]{$index};
+          }
+          print $fh join(' ',@items)."\n";
+        }
       }
     }
+    if($save_file){ close $fh; }
   }
   else{
     # classification
@@ -95,7 +99,7 @@ sub train {
     my @label; my @start; my @count; my @perm;
     # group training data of the same class
     $self->group_classes(\$nr_class,\@label,\@start,\@count,\@perm);
-    if($nr_class eq 1 and !$self->{'quiet'}){
+    if($nr_class == 1 and !$self->{'quiet'}){
       print STDERR "WARNING: training data in only one class. See README for details.\n";
     }
     my @x;
@@ -112,7 +116,7 @@ sub train {
       for($j=0;$j < $nr_class;$j++){
         if($cur_label eq $label[$j]){ last; }
       }
-      if($j eq $nr_class and !$self->{'quiet'}){
+      if($j == $nr_class and !$self->{'quiet'}){
         print STDERR "WARNING: class label ".$cur_label." specified in weight is not found\n";
       }
       else{ $weighted_C[$j] = $self->{'weights'}{$cur_label}; }
@@ -127,7 +131,7 @@ sub train {
     my $p = 0;
     for(my $i=0;$i<$nr_class;$i++){
       for(my $j=$i + 1;$j < $nr_class;$j++){
-        my $sub_prob = new Algorithm::ML::SVM();
+        my $sub_prob = Algorithm::ML::SVM->new();
         my $si = $start[$i]; my $sj = $start[$j];
         my $ci = $count[$i]; my $cj = $count[$j];
         $sub_prob->{'problem'}{'count'} = $ci + $cj;
@@ -187,9 +191,29 @@ sub train {
     if(!$self->{'quiet'}){ print STDERR "Total nSV = $total_sv\n"; }
 
     $p = 0;
-    for(my $i = 0;$i < $l;$i++){
-      if($nonzero[$i]){ $model->set_SV($p++,$x[$i]); }
+    my $fh;
+    if($save_file){
+      use IO::Compress::Bzip2 qw(bzip2 $Bzip2Error);
+      if(!($save_file =~ /\.bz2$/)){ $save_file .= '.bz2'; } # Add the bz2 end if not already
+      $fh = new IO::Compress::Bzip2 $save_file or die "bunzip2 failed: $Bzip2Error\n";
+      print $fh "ORIGINAL_SV\n";
     }
+    for(my $i = 0;$i < $l;$i++){
+      if($nonzero[$i]){
+        $model->set_SV($p++,$x[$i]);
+        if($save_file){
+          my @items;
+          push @items, $self->{'problem'}{'y'}[$i];
+          my @indexes = keys %{ $self->{'problem'}{'x'}[$i] };
+          @indexes = sort {$a <=> $b} @indexes;
+          foreach my $index (@indexes){
+            push @items, $index.':'.$self->{'problem'}{'x'}[$i]{$index};
+          }
+          print $fh join(' ',@items)."\n";
+        }
+      }
+    }
+    if($save_file){ close $fh; }
     my @nz_start; $nz_start[0] = 0;
     for(my $i = 1;$i < $nr_class;$i++){
       $nz_start[$i] = $nz_start[$i - 1] + $nz_count[$i - 1];
@@ -235,7 +259,7 @@ sub binary_svc_probability{ # Cross-validation decision values for probability e
     my $begin = $i * $l / $n_fold;
     my $end = ($i + 1) * $l / $n_fold;
     my $k = 0;
-    my $sub_prob = new Algorithm::ML::SVM();
+    my $sub_prob = Algorithm::ML::SVM->new();
     $sub_prob->{'problem'}{'count'} = $l - ($end - $begin);
     $self->param_copy($sub_prob);
     $k = 0;
@@ -254,13 +278,13 @@ sub binary_svc_probability{ # Cross-validation decision values for probability e
       if($sub_prob->{'problem'}{'y'}[$j]>0){ $p_count++; }
       else{ $n_count++; }
     }
-    if($p_count eq 0 and $n_count eq 0){
+    if($p_count == 0 and $n_count == 0){
       for(my $j=$begin;$j<$end;$j++){ $dec_values[$perm[$j]] = 0; }
     }
-    elsif($p_count > 0 and $n_count eq 0){
+    elsif($p_count > 0 and $n_count == 0){
       for(my $j=$begin;$j<$end;$j++){ $dec_values[$perm[$j]] = 1; }
     }
-    elsif($p_count eq 0 and $n_count > 0){
+    elsif($p_count == 0 and $n_count > 0){
       for(my $j=$begin;$j<$end;$j++){ $dec_values[$perm[$j]] = -1; }
     }
     else{
@@ -269,7 +293,7 @@ sub binary_svc_probability{ # Cross-validation decision values for probability e
       $sub_prob->{'nr_weight'} = 2;
       $sub_prob->{'weights'}{1} = $sub_prob->{'Cp'};
       $sub_prob->{'weights'}{-1} = $sub_prob->{'Cn'};
-      my $sub_model = new Algorithm::ML::SVM::Model();
+      my $sub_model = Algorithm::ML::SVM::Model->new();
       $model->param_copy($sub_model);
       $sub_prob->train($sub_model);
       for(my $j=$begin;$j<$end;$j++){
@@ -384,7 +408,94 @@ sub param_copy{
   }
 }
 
-sub train_one{
+sub train_one {
+  my ($self,$model) = @_;
+  if(!$self->{'threads'}){ return $self->train_one_lin($model); }
+  # Sort Vectors by class
+  my %classes;
+  my %sorted_vectors;
+  my %cnt_per_group; # Count per grouping
+  # sort vectors by class and count number of items per class
+  for(my $i = 0; $i < $self->{'problem'}{'count'}; $i++){
+    my $class = $self->{'problem'}{'y'}[$i];
+    $classes{ $class }++;
+    $sorted_vectors{ $class }[ $cnt_per_group{$class}++ ] = $i;
+  }
+  # Weighted selection of vectors using rand()
+  my $maxgroups = $self->{'maxthreads'};
+  if($self->{'n_fold'}){ $maxgroups = int($self->{'maxthreads'} / $self->{'n_fold'}); }
+  my @groupings;
+  my $group = 0;
+  my $count = $self->{'problem'}{'count'};
+  my @class_list = keys %classes; # make sure order stays the same when searching
+  for(my $group = 0;$group < $maxgroups ;$group++){ $cnt_per_group{$group} = 0; }
+  while($count){
+    if($group >= $maxgroups){ $group = 0; }
+    my $selection = rand(); # float 0.0 to 1.0
+    foreach my $class (@class_list){
+      if($selection < $classes{$class} / $self->{'problem'}{'count'}){
+        if(!@{ $sorted_vectors{$class} }){ next; }
+        my $k = int(rand(1 * @{ $sorted_vectors{$class} }));
+        my $i = $sorted_vectors{$class}[$k];
+        $groupings[$group]{'original_index'}[$cnt_per_group{$group}] = $i;
+        $cnt_per_group{$group}++;
+        splice(@{ $sorted_vectors{$class} },$k,1);
+        last;
+      }
+      $selection -= $classes{$class} / $self->{'problem'}{'count'};
+    }
+    $group++; $count--;
+  }
+  # Spawn threads for each grouping
+  my @threads;
+  foreach my $group (@groupings){
+    push @threads, threads->create('_handle_grouping_train',$self,$model,$group);
+  }
+  # Gather all Support Vectors from each sub classification
+  my @keep_SVs;
+  foreach my $thread (@threads){
+    push @keep_SVs, $thread->join();
+  }
+  # Remove uneeded vectors from main problem set
+  my @x; my @y; my $k = 0;
+  foreach my $index (@keep_SVs){
+    $x[$k] = $self->{'problem'}{'x'}[$index];
+    $y[$k] = $self->{'problem'}{'y'}[$index];
+    $k++;
+  }
+  $self->{'problem'}{'count'} = 1 * @x;
+  $self->{'problem'}{'x'} = \@x;
+  $self->{'problem'}{'y'} = \@y;
+  # Run Solver on subsection of vectors
+  return $self->train_one_lin($model);
+}
+
+sub _handle_grouping_train {
+  my ($self,$model,$group) = @_;
+  my $sub_prob = Algorithm::ML::SVM->new();
+  $self->param_copy($sub_prob);
+  $sub_prob->{'threads'} = 0;
+  $sub_prob->{'problem'}{'count'} = 1 * @{ $$group{'original_index'} };
+  my $k = 0;
+  for(my $j=0;$j < $sub_prob->{'problem'}{'count'};$j++){
+    my $i = $$group{'original_index'}[$j];
+    $sub_prob->{'problem'}{'x'}[$j] = $self->{'problem'}{'x'}[$i];
+    $sub_prob->{'problem'}{'y'}[$j] = $self->{'problem'}{'y'}[$i];
+  }
+  my $sub_model = Algorithm::ML::SVM::Model->new();
+  $model->param_copy($sub_model);
+  my @alpha = $sub_prob->train_one_lin($sub_model);
+  # output SVs
+  my @SVs;
+  for(my $row=0; $row < $sub_prob->{'problem'}{'count'}; $row++){
+    if(abs($alpha[$row]) > 0){
+      push @SVs, $$group{'original_index'}[$row];
+    }
+  }
+  return @SVs;
+}
+
+sub train_one_lin {
   my ($self,$model) = @_;
   my @alpha;
   if($model->svm_type eq 'c_svc'){ @alpha = $self->solve_c_svc($model); }
@@ -480,7 +591,7 @@ sub solve_c_svc {
   @alpha = $self->solver(\@minus_ones,\@y,\@alpha,$model);
   my $sum_alpha = 0;
   for(my $i = 0; $i < $l; $i++){ $sum_alpha += $alpha[$i]; }
-  if($self->{'Cp'} eq $self->{'Cn'} and !$self->{'quiet'}){
+  if($self->{'Cp'} == $self->{'Cn'} and !$self->{'quiet'}){
     print STDERR "nu = ".($sum_alpha/($self->{'Cp'} * $l))."\n";
   }
   for(my $i = 0; $i < $l; $i++){ $alpha[$i] *= $y[$i]; }
@@ -498,7 +609,7 @@ sub solve_nu_svc {
   }
   my $sum_pos = $nu * $l / 2; my $sum_neg = $nu * $l / 2;
   for(my $i = 0; $i < $l; $i++){
-    if($y[$i] eq 1){
+    if($y[$i] == 1){
       $alpha[$i] = 1; 
       if($sum_pos < $alpha[$i]){ $alpha[$i] = $sum_pos; }
       $sum_pos -= $alpha[$i];
@@ -555,9 +666,10 @@ sub _initialize_gradient { # threaded gradient builder
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   for(my $i = $i_start ; $i < $i_end; $i++){
     if($$alpha_status[$i] ne 'lower_bound'){
-      my @Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y);
+      my @Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
       my $alpha_i = $$alpha[$i];
       for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
         $G[$j] += $alpha_i * $Q_i[$j];
@@ -591,14 +703,15 @@ sub set_types{
   else{ die "Could not identify svm type $svm_type\n"; }
 }
 
-sub solver{
+sub solver {
   my ($self,$p,$y,$alpha_ret,$model) = @_;
   $self->set_types($model);
-  if($self->{'threads'}){ return $self->solver_thr($p,$y,$alpha_ret,$model); }
-  else{ return $self->solver_lin($p,$y,$alpha_ret,$model); }
+#  if($self->{'threads'}){ return $self->solver_thr($p,$y,$alpha_ret,$model); }
+#  else{ return $self->solver_lin($p,$y,$alpha_ret,$model); }
+  return $self->solver_lin($p,$y,$alpha_ret,$model);
 }
 
-sub solver_thr{
+sub solver_thr {
   my ($self,$p,$y,$alpha_ret,$model) = @_;
   # Sort Vectors by class
   my %classes;
@@ -655,20 +768,6 @@ sub solver_thr{
   $self->{'problem'}{'count'} = 1 * @x;
   $self->{'problem'}{'x'} = \@x;
   $self->{'problem'}{'y'} = \@y;
-#TODO Chunking or "Second pass threading" doesn't work
-#  # check if there are enough vectors to chunk the solver again
-#  if(!defined($self->{'last_vector_size'})){
-#    if($self->{'problem'}{'count'} < 200 or $self->{'maxthreads'} < 2){ #TODO this is a guess, should optimize for #cores and #elements
-#      return $self->solver_lin($p,$y,$alpha_ret,$model);
-#    }
-#    $self->{'last_vector_size'} = $self->{'problem'}{'count'};
-#    $self->{'maxthreads'} = int($self->{'maxthreads'} / 2);
-#    return $self->solver_thr($p,$y,$alpha_ret,$model);
-#  }
-#  # If enough vectors changed chunk again
-#  if(($self->{'problem'}{'count'} - $self->{'last_vector_size'}) / $self->{'problem'}{'count'} > 0.5){
-#    return $self->solver_thr($p,$y,$alpha_ret,$model);
-#  }
   # Run Solver on subsection of vectors
   return $self->solver_lin($p,$y,$alpha_ret,$model);
 }
@@ -676,7 +775,7 @@ sub solver_thr{
 sub _handle_grouping{
   my ($self,$model,$group,$p,$y,$alpha_ret) = @_;
   my @sub_p; my @sub_y; my @sub_alpha;
-  my $sub_prob = new Algorithm::ML::SVM();
+  my $sub_prob = Algorithm::ML::SVM->new();
   $self->param_copy($sub_prob);
   $sub_prob->{'threads'} = 0;
   $sub_prob->{'problem'}{'count'} = 1 * @{ $$group{'original_index'} };
@@ -689,7 +788,7 @@ sub _handle_grouping{
     $sub_prob->{'problem'}{'x'}[$j] = $self->{'problem'}{'x'}[$i];
     $sub_prob->{'problem'}{'y'}[$j] = $self->{'problem'}{'y'}[$i];
   }
-  my $sub_model = new Algorithm::ML::SVM::Model();
+  my $sub_model = Algorithm::ML::SVM::Model->new();
   $model->param_copy($sub_model);
   my @alpha;
   if($sub_model->svm_type eq 'c_svc'){ @alpha = $sub_prob->solve_c_svc($sub_model); }
@@ -729,7 +828,7 @@ sub solver_lin{
   my $active_size = $self->{'problem'}{'count'};
   # initialize gradient
 #  $self->loger("initialize gradient");
-  my @G; my @G_bar;
+  my @G = (0) x $active_size; my @G_bar = (0) x $active_size;
   for(my $i=0; $i < $self->{'problem'}{'count'}; $i++){
     $G[$i] = $$p[$i];
     $G_bar[$i] = 0;
@@ -759,9 +858,10 @@ sub solver_lin{
     my $gamma = $model->gamma();
     my $coef0 = $model->coef0();
     my $degree = $model->degree();
+    my $keySet = $self->{'keySet'};
     for(my $i=0; $i < $self->{'problem'}{'count'}; $i++){
       if($alpha_status[$i] ne 'lower_bound'){
-        my @Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y);
+        my @Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
         my $alpha_i = $alpha[$i];
         for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
           $G[$j] += $alpha_i * $Q_i[$j];
@@ -786,10 +886,11 @@ sub solver_lin{
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   while($iter < $max_iter){
     # show progress and do shrinking
     $counter--;
-    if($counter eq 0){
+    if($counter == 0){
       $counter = 1000;
       if($counter > $self->{'problem'}{'count'}){ $counter = $self->{'problem'}{'count'}; }
       if($self->{'shrinking'}){ $self->do_shrinking(); }
@@ -811,8 +912,8 @@ sub solver_lin{
     $iter++;
     # update alpha[i] and alpha[j], handle bounds carefully
 #    $self->loger("update alpha[i] and alpha[j], handle bounds carefully");
-    my @Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y);
-    my @Q_j = $self->get_Q($j,$gamma,$coef0,$degree,$y);
+    my @Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
+    my @Q_j = $self->get_Q($keySet,$j,$gamma,$coef0,$degree,$y);
     
     my $C_i = $self->get_C($i,$y);
     my $C_j = $self->get_C($j,$y);
@@ -895,7 +996,7 @@ sub solver_lin{
         else{ $alpha_status[$j] = 'free'; }
       }
       if($alpha_status[$i] eq 'upper_bound' and $ui eq $alpha_status[$i]){
-        @Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y);
+        @Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
         if($ui eq 'upper_bound'){
           for(my $k = 0;$k<$self->{'problem'}{'count'};$k++){ $G_bar[$k] -= $C_i * $Q_i[$k]; }
         }
@@ -904,7 +1005,7 @@ sub solver_lin{
         }
       }
       if($alpha_status[$j] eq 'upper_bound' and $uj eq $alpha_status[$j]){
-        @Q_j = $self->get_Q($j,$gamma,$coef0,$degree,$y);
+        @Q_j = $self->get_Q($keySet,$j,$gamma,$coef0,$degree,$y);
         if($uj eq 'upper_bound'){
           for(my $k = 0;$k<$self->{'problem'}{'count'};$k++){ $G_bar[$k] -= $C_j * $Q_j[$k]; }
         }
@@ -966,7 +1067,7 @@ sub calculate_rho_nu_class {
   my $lb1 = -9**9**9; my $lb2 = -9**9**9;
   my $sum_free1 = 0; my $sum_free2 = 0;
   for(my $i = 0; $i < $active_size; $i++){
-    if($$y[$i] eq 1){
+    if($$y[$i] == 1){
       if($$alpha_status[$i] eq 'upper_bound'){
         if($lb1 < $$G[$i]){ $lb1 = $$G[$i]; }
       }
@@ -1009,11 +1110,11 @@ sub calculate_rho_one_class {
   for(my $i = 0; $i < $active_size; $i++){
     my $yG = $$y[$i] * $$G[$i];
     if($$alpha_status[$i] eq 'upper_bound'){
-      if($$y[$i] eq -1){ if($ub > $yG){$ub = $yG;} }
+      if($$y[$i] == -1){ if($ub > $yG){$ub = $yG;} }
       else{ if($lb < $yG){$lb = $yG;} }
     }
     elsif($$alpha_status[$i] eq 'lower_bound'){
-      if($$y[$i] eq 1){ if($ub > $yG){$ub = $yG;} }
+      if($$y[$i] == 1){ if($ub > $yG){$ub = $yG;} }
       else{ if($lb < $yG){$lb = $yG;} }
     }
     else{
@@ -1030,7 +1131,7 @@ sub calculate_rho_one_class {
 sub reconstruct_gradient{
   my ($self,$y,$alpha,$G,$G_bar,$p,$active_size,$model) = @_;
   # reconstruct inactive elements of G from G_bar and free variables
-  if($active_size eq $self->{'problem'}{'count'}){ return; }
+  if($active_size == $self->{'problem'}{'count'}){ return; }
   my $nr_free = 0;
   for(my $j = $active_size;$j < $self->{'problem'}{'count'};$j++){
     $$G[$j] = $$G_bar[$j] + $$p[$j];
@@ -1042,20 +1143,21 @@ sub reconstruct_gradient{
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   if($nr_free * $self->{'problem'}{'count'} > 2 * $active_size * ($self->{'problem'}{'count'} - $active_size)){
     for(my $i = $active_size; $i < $self->{'problem'}{'count'}; $i++){
-      my @Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y);
+      my @Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
       for(my $j = 0; $j < $active_size; $j++){
-        if($self->is_free($j)){ $$G[$i] += $$alpha[$j] * $self->get_Q($j,$gamma,$coef0,$degree,$y); }
+        if($self->is_free($j)){ $$G[$i] += $$alpha[$j] * $self->get_Q($keySet,$j,$gamma,$coef0,$degree,$y); }
       }
     }
   }
   else{
     for(my $i = 0;$i < $active_size; $i++){
       if($self->is_free($i)){
-        my $Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y);
+        my $Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y);
         my $alpha_i = $$alpha[$i];
-        for(my $j = $active_size; $j < $self->{'problem'}{'count'}; $j++){ $$G[$j] += $alpha_i * $self->get_Q($j,$gamma,$coef0,$degree,$y); }
+        for(my $j = $active_size; $j < $self->{'problem'}{'count'}; $j++){ $$G[$j] += $alpha_i * $self->get_Q($keySet,$j,$gamma,$coef0,$degree,$y); }
       }
     }
   }
@@ -1094,8 +1196,9 @@ sub select_working_set_nu_class {
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   for(my $t = 0;$t < $active_size;$t++){
-    if($$y[$t] eq 1){
+    if($$y[$t] == 1){
       if($$alpha_status[$t] ne 'upper_bound'){
         if(0 - $$G[$t] >= $Gmaxp){
           $Gmaxp = 0 - $$G[$t];
@@ -1116,10 +1219,10 @@ sub select_working_set_nu_class {
   my $ip = $Gmaxp_idx;
   my $in = $Gmaxn_idx;
   my @Q_ip; my @Q_in;
-  if($ip ne -1){ @Q_ip = $self->get_Q($ip,$gamma,$coef0,$degree,$y); }
-  if($in ne -1){ @Q_in = $self->get_Q($ip,$gamma,$coef0,$degree,$y); }
+  if($ip != -1){ @Q_ip = $self->get_Q($keySet,$ip,$gamma,$coef0,$degree,$y); }
+  if($in != -1){ @Q_in = $self->get_Q($keySet,$ip,$gamma,$coef0,$degree,$y); }
   for(my $j = 0; $j < $active_size; $j++){
-    if($$y[$j] eq 1){
+    if($$y[$j] == 1){
       if($$alpha_status[$j] ne 'lower_bound'){
         my $grad_diff = $Gmaxp + $$G[$j];
         if($$G[$j] >= $Gmaxp2){ $Gmaxp2 = $$G[$j]; }
@@ -1155,7 +1258,7 @@ sub select_working_set_nu_class {
   my $maxGmax = $Gmaxp + $Gmaxp2;
   if($Gmaxn + $Gmaxn2 > $maxGmax){ $maxGmax = $Gmaxn + $Gmaxn2; }
   if($maxGmax < $self->{'epsilon_trm'}){ return 1; }
-  if($$y[$Gmin_idx] eq 1){ $$i_ref = $Gmaxp_idx; }
+  if($$y[$Gmin_idx] == 1){ $$i_ref = $Gmaxp_idx; }
   else{ $$i_ref = $Gmaxn_idx; }
   $$j_ref = $Gmin_idx;
   return 0;
@@ -1171,8 +1274,9 @@ sub select_working_set_one_class {
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   for(my $t = 0;$t < $active_size;$t++){
-    if($$y[$t] eq 1){
+    if($$y[$t] == 1){
       if($$alpha_status[$t] ne 'upper_bound'){
         if(-$$G[$t] >= $Gmax){
           $Gmax = -$$G[$t];
@@ -1192,9 +1296,9 @@ sub select_working_set_one_class {
 
   my $i = $Gmax_idx;
   my @Q_i;
-  if($i ne -1){ @Q_i = $self->get_Q($i,$gamma,$coef0,$degree,$y); }
+  if($i ne -1){ @Q_i = $self->get_Q($keySet,$i,$gamma,$coef0,$degree,$y); }
   for(my $j = 0; $j < $active_size; $j++){
-    if($$y[$j] eq 1){
+    if($$y[$j] == 1){
       if($$alpha_status[$j] ne 'lower_bound'){
         my $grad_diff = $Gmax + $$G[$j];
         if($$G[$j] >= $Gmax2){ $Gmax2 = $$G[$j]; }
@@ -1239,19 +1343,20 @@ sub get_QD{
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   if($model->svm_type eq 'one_class' or 
     $model->svm_type eq 'c_svc' or 
     $model->svm_type eq 'nu_svc'){
     for(my $row=0; $row < $self->{'problem'}{'count'}; $row++){
       my $xSet = $self->{'problem'}{'x'}[$row];
-      $QD[$row] = _kernel($xSet,$xSet,$gamma,$coef0,$degree);
+      $QD[$row] = _kernel($keySet,$xSet,$xSet,$gamma,$coef0,$degree);
     }
   }
   elsif($model->svm_type eq 'epsilon_svr' or $model->svm_type eq 'nu_svr'){
     my $l = $self->{'problem'}{'count'} / 2;
     for(my $row=0; $row < $l; $row++){
       my $xSet = $self->{'problem'}{'x'}[$row];
-      $QD[$row] = _kernel($xSet,$xSet,$gamma,$coef0,$degree);
+      $QD[$row] = _kernel($keySet,$xSet,$xSet,$gamma,$coef0,$degree);
       $QD[$row + $l] = $QD[$row];
     }
   }
@@ -1259,39 +1364,32 @@ sub get_QD{
 }
 
 sub get_Q_one_class{
-  my ($self,$i,$gamma,$coef0,$degree) = @_;
-  my @Q;
+  my ($self,$keySet,$i,$gamma,$coef0,$degree) = @_;
   if(defined($self->{'Q'}{$i})){ return @{ $self->{'Q'}{$i} }; }
+  my @Q;
   my $xSet = $self->{'problem'}{'x'}[$i];
   for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
-    $Q[$j] = _kernel($xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
+    $Q[$j] = _kernel($keySet,$xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
   }
   $self->{'Q'}{$i} = \@Q;
   return @Q;
 }
 
 sub get_Q_svc{
-  my ($self,$i,$gamma,$coef0,$degree,$y) = @_;
-  my @Q = $self->get_Q_one_class($i,$gamma,$coef0,$degree);
-  for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
-    $Q[$j] *= $$y[$i] * $$y[$j];
-  }
-  return @Q;
-}
-
-sub get_Q_svc_OLD{
-  my ($self,$i,$gamma,$coef0,$degree,$y) = @_;
+  my ($self,$keySet,$i,$gamma,$coef0,$degree,$y) = @_;
+  if(defined($self->{'Q'}{$i})){ return @{ $self->{'Q'}{$i} }; }
   my @Q;
   my $xSet = $self->{'problem'}{'x'}[$i];
   for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
     $Q[$j] = $$y[$i] * $$y[$j] * 
-      _kernel($xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
+    _kernel($keySet,$xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
   }
+  $self->{'Q'}{$i} = \@Q;
   return @Q;
 }
 
 sub get_Q_svr{
-  my ($self,$i,$gamma,$coef0,$degree) = @_;
+  my ($self,$keySet,$i,$gamma,$coef0,$degree) = @_;
   my @Q;
   my $l = $self->{'problem'}{'count'} / 2;
   my @sign; my @index;
@@ -1311,7 +1409,7 @@ sub get_Q_svr{
   my $xSet = $self->{'problem'}{'x'}[$real_i];
   my @Qorig;
   for(my $j=0; $j < $l; $j++){
-    $Qorig[$j] = _kernel($xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
+    $Qorig[$j] = _kernel($keySet,$xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
   }
   my $si = $sign[$i];
   for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){ # reorder and copy
@@ -1320,64 +1418,10 @@ sub get_Q_svr{
   return @Q;
 }
 
-sub get_Q_OLD{
-  my ($self,$i,$len,$y,$model) = @_;
-  my @Q;
-  my $gamma = $model->gamma();
-  my $coef0 = $model->coef0();
-  my $degree = $model->degree();
-  if($model->svm_type eq 'one_class'){
-    if(defined($self->{'Q'}{$i})){ return @{ $self->{'Q'}{$i} }; }
-    my $xSet = $self->{'problem'}{'x'}[$i];
-    for(my $j=0; $j < $len; $j++){
-      my $jSet = $self->{'problem'}{'x'}[$j];
-      $Q[$j] = _kernel($xSet,$jSet,$gamma,$coef0,$degree);
-    }
-    $self->{'Q'}{$i} = \@Q;
-  }
-  elsif($model->svm_type eq 'c_svc' or $model->svm_type eq 'nu_svc'){
-    my $xSet = $self->{'problem'}{'x'}[$i];
-    for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
-      my $jSet = $self->{'problem'}{'x'}[$j];
-      my $kern = _kernel($xSet,$jSet,$gamma,$coef0,$degree);
-      $Q[$j] = $$y[$i] * $$y[$j] * $kern;
-    }
-  }
-  elsif($model->svm_type eq 'epsilon_svr' or $model->svm_type eq 'nu_svr'){
-    my $l = $self->{'problem'}{'count'} / 2;
-    my @sign; my @index;
-    if( defined($self->{'get_Q_sign'}) and defined($self->{'get_Q_index'}) ){
-      @sign = @{ $self->{'get_Q_sign'} };
-      @index = @{ $self->{'get_Q_index'} };
-    }
-    else{
-      for(my $k=0; $k < $l; $k++){
-        $sign[$k] = 1; $sign[$k+$l] = -1;
-        $index[$k] = $k; $index[$k+$l] = $k;
-      }
-      $self->{'get_Q_sign'} = \@sign;
-      $self->{'get_Q_index'} = \@index;
-    }
-    my $real_i = $index[$i];
-    my $xSet = $self->{'problem'}{'x'}[$real_i];
-    my @Qorig;
-    for(my $j=0; $j < $l; $j++){
-      my $jSet = $self->{'problem'}{'x'}[$j];
-      $Qorig[$j] = _kernel($xSet,$jSet,$gamma,$coef0,$degree);
-    }
-    # reorder and copy
-    my $si = $sign[$i];
-    for(my $j=0; $j < $len; $j++){
-      $Q[$j] = $si * $sign[$j] * $Qorig[$index[$j]];
-    }
-  }
-  return @Q;
-}
-
 sub svr_probability{ # Return parameter of a Laplace distribution
   my ($self,$model) = @_;
   my @ymv; my $mae = 0;
-  my $newsvm = new Algorithm::ML::SVM();
+  my $newsvm = Algorithm::ML::SVM->new();
   $self->param_copy($newsvm);
   $newsvm->{'probability'} = 0;
   $newsvm->{'n_fold'} = 5;
@@ -1470,7 +1514,7 @@ sub cross_validation_lin { # linear mode
   for(my $i=0;$i<$n_fold;$i++){
     my $begin = $fold_start[$i];
     my $end = $fold_start[$i + 1];
-    my $sub_prob = new Algorithm::ML::SVM();
+    my $sub_prob = Algorithm::ML::SVM->new();
 
     $sub_prob->{'problem'}{'count'} = $l - ($end - $begin);
 
@@ -1486,7 +1530,7 @@ sub cross_validation_lin { # linear mode
       $k++;
     }
     $self->param_copy($sub_prob);
-    my $sub_model = new Algorithm::ML::SVM::Model();
+    my $sub_model = Algorithm::ML::SVM::Model->new();
     $model->param_copy($sub_model);
     $sub_prob->train($sub_model);
     if($self->{'probability'} and ($model->svm_type eq 'c_svc' or $model->svm_type eq 'nu_svc')) {
@@ -1588,7 +1632,7 @@ sub _cross_validation_solve {
   my $message;
   my $l = $self->{'problem'}{'count'};
 
-  my $sub_prob = new Algorithm::ML::SVM();
+  my $sub_prob = Algorithm::ML::SVM->new();
   $sub_prob->{'problem'}{'count'} = $l - ($end - $begin);
 
   my $k=0;
@@ -1603,7 +1647,7 @@ sub _cross_validation_solve {
     $k++;
   }
   $self->param_copy($sub_prob);
-  my $sub_model = new Algorithm::ML::SVM::Model();
+  my $sub_model = Algorithm::ML::SVM::Model->new();
   $model->param_copy($sub_model);
   $sub_prob->train($sub_model);
   if($self->{'probability'} and ($model->svm_type eq 'c_svc' or $model->svm_type eq 'nu_svc')) {
@@ -1660,38 +1704,21 @@ sub set_problem {
 }
 
 sub read_problem_file {
-  my ($self,$model,$training_set_file) = @_;
-  my $elements; my $max_index = 0;
+  my $self = shift;
+  my $model = shift;
+  my @files = @_;
+  my $max_index = 0;
   $self->{'problem'}{'count'} = 0;
   $self->{'problem'}{'elements'} = 0;
-#  open IN, '<'.$training_set_file or die "can't open input file $training_set_file\n";
-#  my @file = <IN>;
-#  while(my $line = <IN>){ chomp($line);
-#  while(@file){ my $line = shift @file; chomp($line);
-  use File::Slurp;
-  foreach my $line (split(/\n/,read_file($training_set_file))){
-    my @items = split(/\s+/,$line);
-    my $row = $self->{'problem'}{'count'};
-    $self->{'problem'}{'y'}[$row] = shift @items;
-    my %xSet;
-    foreach my $item (@items){
-      my ($x,$val) = split(/:/,$item);
-#      $x = 1 * $x; $val = 1 * $val;
-      $xSet{$x} = $val;
-      if($x > $max_index){ $max_index = $x; }
-#      if($item =~ /(\d+):(\S+)/){
-#        my $x = 1 * $1; my $val = 1 * $2;
-#        $xSet{$x} = $val;
-#        if($x > $max_index){ $max_index = $x; }
-#      }
-    }
-    $self->{'problem'}{'x'}[$row] = \%xSet;
-    $self->{'problem'}{'elements'} += @items;
-    $self->{'problem'}{'count'}++;
-  }
-#  close IN;
+
+  my %keySet;
+  foreach my $file (@files){ $self->_process_problem_file($file,\%keySet,\$max_index); }
+
+  my @features = keys %keySet;
+  $self->{'keySet'} = \@features;
+  
   my $gamma = 1 * $model->gamma();
-  if($gamma eq 0 and $max_index){
+  if($gamma == 0 and $max_index){
     $model->set_gamma(1/$max_index);
   }
   #TODO Build precomputed kernel version
@@ -1699,9 +1726,45 @@ sub read_problem_file {
 #  }
 }
 
+sub _process_problem_file {
+  my ($self,$file,$keySet,$max_index) = @_;
+  if(!(-e $file)){ die "File $file does not exist.\n"; }
+  my $result = join(' ',`file "$file"`);
+  my $fh;
+  if($result =~ /bzip2/){
+    use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error) ;
+    $fh = IO::Uncompress::Bunzip2->new($file) or die "bunzip2 failed: $Bunzip2Error\n";
+  }
+  elsif($result =~ /gzip/){
+    use IO::Uncompress::Gunzip qw(gunzip $GunzipError) ;
+    $fh = IO::Uncompress::Gunzip->new($file) or die "Gunzip failed: $GunzipError\n";
+  }
+  elsif($result =~ /ASCII/){
+    open $fh, '<', $file or die "Unable to open $file.\n";
+  }
+  else{ die "Unhandled file type $result from $file"; }
+
+  foreach my $line (<$fh>){
+    my @items = split(/\s+/,$line);
+    my $row = $self->{'problem'}{'count'};
+    $self->{'problem'}{'y'}[$row] = shift @items;
+    my %xSet;
+    foreach my $item (@items){
+      my ($x,$val) = split(/:/,$item);
+      $xSet{$x} = $val;
+      if($x > $$max_index){ $$max_index = $x; }
+      $$keySet{$x} = 1;
+    }
+    $self->{'problem'}{'x'}[$row] = \%xSet;
+    $self->{'problem'}{'elements'} += @items;
+    $self->{'problem'}{'count'}++;
+  }
+  close $fh;
+}
+
 sub save_problem_file {
   my ($self,$save_set_file) = @_;
-  open FH, ">".$save_set_file or die "Couldn't open save set file $save_set_file\n";
+  open my $input, '>', $save_set_file or die "Couldn't open save set file $save_set_file\n";
   for(my $row = 0;$row < $self->{'problem'}{'count'}; $row++){
     my @line = ($self->{'problem'}{'y'}[$row]);
     my $xSet = $self->{'problem'}{'x'}[$row];
@@ -1709,9 +1772,9 @@ sub save_problem_file {
     foreach my $feature (@features){
       push @line, $feature.':'.$$xSet{$feature};
     }
-    print FH join(' ',@line)."\n";
+    print $input join(' ',@line)."\n";
   }
-  close FH;
+  close $input;
 }
 
 sub problem_y_vectors { my ($self) = @_; return @{ $self->{'problem'}{'y'} }; }
@@ -1734,16 +1797,16 @@ sub predictFile {
   my $fh;
   if($result =~ /bzip2/){
     use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error) ;
-    $fh = new IO::Uncompress::Bunzip2 $file or die "bunzip2 failed: $Bunzip2Error\n";
+    $fh = IO::Uncompress::Bunzip2->new($file) or die "bunzip2 failed: $Bunzip2Error\n";
   }
   elsif($result =~ /gzip/){
     use IO::Uncompress::Gunzip qw(gunzip $GunzipError) ;
-    $fh = new IO::Uncompress::Gunzip $file or die "Gunzip failed: $GunzipError\n";
+    $fh = IO::Uncompress::Gunzip->new($file) or die "Gunzip failed: $GunzipError\n";
   }
   elsif($result =~ /ASCII/){
-    open $fh, "<".$file or die "Unable to open test_file $file.\n";
+    open $fh, '<', $file or die "Unable to open test_file $file.\n";
   }
-  else{ die "Unhandled log type $result from $file"; }
+  else{ die "Unhandled file type $result from $file"; }
   if($self->{'threads'}){
     my @threads;
     my @dump;
@@ -1758,7 +1821,7 @@ sub predictFile {
           my $thread = shift @threads;
           print $out $thread->join();
         }
-        push @threads, threads->create('_predict_thr',$self,$model,@dump);
+        push @threads, threads->create('_predict_thr',$self,$model,\@dump);
         @dump = ();
         push @dump, $line;
       }
@@ -1768,7 +1831,7 @@ sub predictFile {
         my $thread = shift @threads;
         print $out $thread->join();
       }
-      push @threads, threads->create('_predict_thr',$self,$model,@dump);
+      push @threads, threads->create('_predict_thr',$self,$model,\@dump);
     }
     foreach my $thread (@threads){
       print $out $thread->join();
@@ -1794,11 +1857,9 @@ sub predictFile {
 }
 
 sub _predict_thr {
-  my $self = shift;
-  my $model = shift;
-  my @lines = @_;
+  my ($self,$model,$lines) = @_;
   my $return;
-  foreach my $line (@lines){
+  foreach my $line (@$lines){
     my @items = split(/\s+/,$line);
     my $y = shift;
     my %xSet;
@@ -1819,13 +1880,14 @@ sub predict {
   my $gamma = $model->gamma();
   my $coef0 = $model->coef0();
   my $degree = $model->degree();
+  my $keySet = $self->{'keySet'};
   if($model->svm_type() eq 'one_class' or
     $model->svm_type() eq 'epsilon_svr' or
     $model->svm_type() eq 'nu_SVR'){
     my $sum = 0;
     for(my $row = 0; $row < $model->count(); $row++){
       $sum += $model->sv_coef($row,0) * 
-        _kernel($xSet,$model->sv($row),$gamma,$coef0,$degree);
+        _kernel($keySet,$xSet,$model->sv($row),$gamma,$coef0,$degree);
     }
     $sum -= $model->rho(0);
     if($model->svm_type() ne 'one_class'){ return $sum; }
@@ -1835,7 +1897,7 @@ sub predict {
   else{
     my @kvalues;
     for(my $row = 0; $row < $model->count(); $row++){
-      $kvalues[$row] = _kernel($xSet,$model->sv($row),$gamma,$coef0,$degree);
+      $kvalues[$row] = _kernel($keySet,$xSet,$model->sv($row),$gamma,$coef0,$degree);
     }
     my @start;
     for(my $i = 1; $i < $model->nr_class(); $i++){
@@ -1870,63 +1932,33 @@ sub predict {
   }
 }
 
-sub _kernel_linear { return _dot($_[0],$_[1]); } # (xSet,sv)
+sub _kernel_linear { return _dot(@_); } # (xSet,sv)
 sub _kernel_polynomial {
-  my ($xSet,$sv,$gamma,$coef0,$degree) = @_;
-  return ($gamma * _dot($xSet,$sv) + $coef0) ** $degree;
+  my ($keySet,$xSet,$sv,$gamma,$coef0,$degree) = @_;
+  return ($gamma * _dot($keySet,$xSet,$sv) + $coef0) ** $degree;
 }
 sub _kernel_rbf {
-  my ($xSet,$sv,$gamma) = @_;
+  my ($keySet,$xSet,$sv,$gamma) = @_;
   my $sum = 0;
-  my %keySet = (%$xSet, %$sv);
-  foreach my $key (keys %keySet){
+#  my %keySet = (%$xSet, %$sv);
+#  foreach my $key (keys %keySet){
+  foreach my $key (@{$keySet}){
     $sum += ( $$xSet{$key} - $$sv{$key} ) ** 2;
   }
   return exp(-1 * $gamma * $sum);
 }
 sub _kernel_sigmoid {
-  my ($xSet,$sv,$gamma,$coef0) = @_;
-  return tanh($gamma * _dot($xSet,$sv) + $coef0);
+  my ($keySet,$xSet,$sv,$gamma,$coef0) = @_;
+  return tanh($gamma * _dot($keySet,$xSet,$sv) + $coef0);
 }
 sub _kernel_precomputed {
   return 0; #TODO Build
 }
 
-sub _kernel_OLD {
-  my ($xSet,$sv,$model) = @_;
-  my $type = $model->kernel_type();
-  my $gamma = $model->gamma();
-  my $coef0 = $model->coef0();
-  my $degree = $model->degree();
-  if($type eq 'linear'){
-    return _dot($xSet,$sv);
-  }
-  elsif($type eq 'polynomial'){
-    return ($gamma * _dot($xSet,$sv) + $coef0) ** $degree;
-  }
-  elsif($type eq 'rbf'){
-    my $sum = 0;
-    my %keySet = keys %$xSet;
-    foreach my $key (keys %$xSet){ $keySet{$key} = 1; }
-    foreach my $key (keys %$sv){ $keySet{$key} = 1; }
-    foreach my $key (keys %keySet){
-      $sum += ( $$xSet{$key} - $$sv{$key} ) ** 2;
-    }
-    return exp(-1 * $gamma * $sum);
-  }
-  elsif($type eq 'sigmoid'){
-    return tanh($gamma * _dot($xSet,$sv) + $coef0);
-  }
-  elsif($type eq 'precomputed'){
-    #TODO Fill in precomputed needs function pass here
-  }
-  return 0;
-}
-
 sub _dot{
-  my ($x,$y) = @_;
+  my ($keySet,$x,$y) = @_;
   my $sum = 0;
-  foreach my $key (keys %$y){ 
+  foreach my $key (@{$keySet}){
     $sum += $$x{$key} * $$y{$key}; 
   }
   return $sum;

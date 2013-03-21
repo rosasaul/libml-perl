@@ -40,6 +40,8 @@ sub new {
   bless($self,$class);
   my @rho; $self->{'param'}{'rho'} = \@rho;
   $self->{'param'}{'coef0'} = 0;
+  # Set the Gamma to avoid errors if not set
+  $self->{'param'}{'gamma'} = 0;
   return $self;
 }
 
