@@ -52,6 +52,8 @@ sub set_epsilon_trm { my ($self,$epsilon_trm) = @_; $self->{'epsilon_trm'} = $ep
 
 sub train {
   my ($self,$model,$save_file) = @_;
+  my @features = keys %{ $self->{'keySetHash'} };
+  $self->{'keySet'} = \@features;
 #  $self->loger("Starting Trainer");
   if($model->svm_type eq 'one_class' or
     $model->svm_type eq 'epsilon_svr' or
@@ -196,7 +198,7 @@ sub train {
       use IO::Compress::Bzip2 qw(bzip2 $Bzip2Error);
       if(!($save_file =~ /\.bz2$/)){ $save_file .= '.bz2'; } # Add the bz2 end if not already
       $fh = new IO::Compress::Bzip2 $save_file or die "bunzip2 failed: $Bzip2Error\n";
-      print $fh "ORIGINAL_SV\n";
+#      print $fh "ORIGINAL_SV\n";
     }
     for(my $i = 0;$i < $l;$i++){
       if($nonzero[$i]){
@@ -1619,7 +1621,6 @@ sub cross_validation_thr { # Threaded Mode
     my $end = $fold_start[$i + 1];
     my $thread = shift @threads;
     my ($target_calculated,$message) = $thread->join();
-#    print STDERR $message; #TODO Retireve messages
     for(my $j=$begin;$j<$end;$j++){
       $$target[$perm[$j]] = $$target_calculated[$perm[$j]];
     }
@@ -1713,17 +1714,12 @@ sub read_problem_file {
 
   my %keySet;
   foreach my $file (@files){ $self->_process_problem_file($file,\%keySet,\$max_index); }
-
-  my @features = keys %keySet;
-  $self->{'keySet'} = \@features;
+  $self->{'keySetHash'} = \%keySet;
   
   my $gamma = 1 * $model->gamma();
   if($gamma == 0 and $max_index){
     $model->set_gamma(1/$max_index);
   }
-  #TODO Build precomputed kernel version
-#  if($self->{'kernel_type'} eq 'precomputed'){
-#  }
 }
 
 sub _process_problem_file {
@@ -1760,6 +1756,15 @@ sub _process_problem_file {
     $self->{'problem'}{'count'}++;
   }
   close $fh;
+}
+
+sub add_vector {
+  my ($self,$y,$xSet) = @_;
+  my $row = $self->{'problem'}{'count'};
+  $self->{'problem'}{'y'}[$row] = $y;
+  $self->{'problem'}{'x'}[$row] = $xSet;
+  $self->{'problem'}{'count'}++;
+
 }
 
 sub save_problem_file {
@@ -1895,6 +1900,7 @@ sub predict {
     else{ return -1; }
   }
   else{
+    if(!$dec_values){ my @dec_values_array; $dec_values = \@dec_values_array; }
     my @kvalues;
     for(my $row = 0; $row < $model->count(); $row++){
       $kvalues[$row] = _kernel($keySet,$xSet,$model->sv($row),$gamma,$coef0,$degree);
@@ -1940,8 +1946,6 @@ sub _kernel_polynomial {
 sub _kernel_rbf {
   my ($keySet,$xSet,$sv,$gamma) = @_;
   my $sum = 0;
-#  my %keySet = (%$xSet, %$sv);
-#  foreach my $key (keys %keySet){
   foreach my $key (@{$keySet}){
     $sum += ( $$xSet{$key} - $$sv{$key} ) ** 2;
   }
@@ -1950,9 +1954,6 @@ sub _kernel_rbf {
 sub _kernel_sigmoid {
   my ($keySet,$xSet,$sv,$gamma,$coef0) = @_;
   return tanh($gamma * _dot($keySet,$xSet,$sv) + $coef0);
-}
-sub _kernel_precomputed {
-  return 0; #TODO Build
 }
 
 sub _dot{
