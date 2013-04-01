@@ -53,6 +53,7 @@ sub set_epsilon_trm { my ($self,$epsilon_trm) = @_; $self->{'epsilon_trm'} = $ep
 sub train {
   my ($self,$model,$save_file) = @_;
   my @features = keys %{ $self->{'keySetHash'} };
+  $self->set_types($model);
   $self->{'keySet'} = \@features;
 #  $self->loger("Starting Trainer");
   if($model->svm_type eq 'one_class' or
@@ -451,7 +452,7 @@ sub train_one {
   # Spawn threads for each grouping
   my @threads;
   foreach my $group (@groupings){
-    push @threads, threads->create('_handle_grouping_train',$self,$model,$group);
+    push @threads, threads->create('_handle_grouping',$self,$model,$group);
   }
   # Gather all Support Vectors from each sub classification
   my @keep_SVs;
@@ -472,7 +473,7 @@ sub train_one {
   return $self->train_one_lin($model);
 }
 
-sub _handle_grouping_train {
+sub _handle_grouping {
   my ($self,$model,$group) = @_;
   my $sub_prob = Algorithm::ML::SVM->new();
   $self->param_copy($sub_prob);
@@ -706,109 +707,6 @@ sub set_types{
 }
 
 sub solver {
-  my ($self,$p,$y,$alpha_ret,$model) = @_;
-  $self->set_types($model);
-#  if($self->{'threads'}){ return $self->solver_thr($p,$y,$alpha_ret,$model); }
-#  else{ return $self->solver_lin($p,$y,$alpha_ret,$model); }
-  return $self->solver_lin($p,$y,$alpha_ret,$model);
-}
-
-sub solver_thr {
-  my ($self,$p,$y,$alpha_ret,$model) = @_;
-  # Sort Vectors by class
-  my %classes;
-  my %sorted_vectors;
-  my %cnt_per_group; # Count per grouping
-  # sort vectors by class and count number of items per class
-  for(my $i = 0; $i < $self->{'problem'}{'count'}; $i++){
-    my $class = $self->{'problem'}{'y'}[$i];
-    $classes{ $class }++;
-    $sorted_vectors{ $class }[ $cnt_per_group{$class}++ ] = $i;
-  }
-  # Weighted selection of vectors using rand()
-  my $maxgroups = $self->{'maxthreads'};
-  if($self->{'n_fold'}){ $maxgroups = int($self->{'maxthreads'} / $self->{'n_fold'}); }
-  my @groupings;
-  my $group = 0;
-  my $count = $self->{'problem'}{'count'};
-  my @class_list = keys %classes; # make sure order stays the same when searching
-  foreach my $group (keys %cnt_per_group){ $cnt_per_group{$group} = 0; }
-  while($count){
-    if($group >= $maxgroups){ $group = 0; }
-    my $selection = rand(); # float 0.0 to 1.0
-    foreach my $class (@class_list){
-      if($selection < $classes{$class} / $self->{'problem'}{'count'}){
-        if(!@{ $sorted_vectors{$class} }){ next; }
-        my $k = int(rand(1 * @{ $sorted_vectors{$class} }));
-        my $i = $sorted_vectors{$class}[$k];
-        $groupings[$group]{'original_index'}[$cnt_per_group{$group}] = $i;
-        $cnt_per_group{$group}++;
-        splice(@{ $sorted_vectors{$class} },$k,1);
-        last;
-      }
-      $selection -= $classes{$class} / $self->{'problem'}{'count'};
-    }
-    $group++; $count--;
-  }
-  # Spawn threads for each grouping
-  my @threads;
-  foreach my $group (@groupings){
-    push @threads, threads->create('_handle_grouping',$self,$model,$group,$p,$y,$alpha_ret);
-  }
-  # Gather all Support Vectors from each sub classification
-  my @keep_SVs;
-  foreach my $thread (@threads){
-    push @keep_SVs, $thread->join();
-  }
-  # Remove uneeded vectors from main problem set
-  my @x; my @y; my $k = 0;
-  foreach my $index (@keep_SVs){
-    $x[$k] = $self->{'problem'}{'x'}[$index];
-    $y[$k] = $self->{'problem'}{'y'}[$index];
-    $k++;
-  }
-  $self->{'problem'}{'count'} = 1 * @x;
-  $self->{'problem'}{'x'} = \@x;
-  $self->{'problem'}{'y'} = \@y;
-  # Run Solver on subsection of vectors
-  return $self->solver_lin($p,$y,$alpha_ret,$model);
-}
-
-sub _handle_grouping{
-  my ($self,$model,$group,$p,$y,$alpha_ret) = @_;
-  my @sub_p; my @sub_y; my @sub_alpha;
-  my $sub_prob = Algorithm::ML::SVM->new();
-  $self->param_copy($sub_prob);
-  $sub_prob->{'threads'} = 0;
-  $sub_prob->{'problem'}{'count'} = 1 * @{ $$group{'original_index'} };
-  my $k = 0;
-  for(my $j=0;$j < $sub_prob->{'problem'}{'count'};$j++){
-    my $i = $$group{'original_index'}[$j];
-    $sub_p[$i] = $$p[$i];
-    $sub_y[$i] = $$y[$i];
-    $sub_alpha[$i] = $$alpha_ret[$i];
-    $sub_prob->{'problem'}{'x'}[$j] = $self->{'problem'}{'x'}[$i];
-    $sub_prob->{'problem'}{'y'}[$j] = $self->{'problem'}{'y'}[$i];
-  }
-  my $sub_model = Algorithm::ML::SVM::Model->new();
-  $model->param_copy($sub_model);
-  my @alpha;
-  if($sub_model->svm_type eq 'c_svc'){ @alpha = $sub_prob->solve_c_svc($sub_model); }
-  elsif($sub_model->svm_type eq 'nu_svc'){ @alpha = $sub_prob->solve_nu_svc($sub_model); }
-  elsif($sub_model->svm_type eq 'one_class'){ @alpha = $sub_prob->solve_one_class($sub_model); }
-  elsif($sub_model->svm_type eq 'epsilon_svr'){ @alpha = $sub_prob->solve_epsilon_svr($sub_model); }
-  elsif($sub_model->svm_type eq 'nu_svr'){ @alpha = $sub_prob->solve_nu_svr($sub_model); }
-  # output SVs
-  my @SVs;
-  for(my $row=0; $row < $sub_prob->{'problem'}{'count'}; $row++){
-    if(abs($alpha[$row]) > 0){
-      push @SVs, $$group{'original_index'}[$row];
-    }
-  }
-  return @SVs;
-}
-
-sub solver_lin{
   my ($self,$p,$y,$alpha_ret,$model) = @_;
 #  $self->loger("Run Solver");
   my @QD = $self->get_QD($model);
