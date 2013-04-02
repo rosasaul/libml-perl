@@ -1877,7 +1877,7 @@ sub initCoef {
   if(!defined($self->{'cost'})){ $self->{'cost'} = 1; }
   if(!defined($self->{'nu'})){ $self->{'nu'} = 0.5; }
   if(!defined($self->{'epsilon_svr'})){ $self->{'epsilon_svr'} = 0.1; }
-  if(!defined($self->{'epsilon_svr'})){ $self->{'epsilon_svr'} = 0.001; }
+  if(!defined($self->{'epsilon_trm'})){ $self->{'epsilon_trm'} = 0.001; }
 }
 
 1;
