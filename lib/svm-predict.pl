@@ -7,9 +7,11 @@ my $REVISIONS = '
 0 Initial File
 ';
 
+BEGIN{unshift @INC,"/home/srosa/perl";} #Adding local dir
+
 # Use Functions
 use strict;
-use ML::SVM;
+use Algorithm::ML::SVM;
 use Getopt::Long;
 
 my $help = "svm-predict v$VERSION libsvm compatible perl native prediction CL tool
@@ -34,6 +36,7 @@ under certain conditions; see LICENSE.txt for details.
 ";
 
 my $probability = 0;
+my $threads = 1;
 my $maxthr;
 my $thrTune;
 my $debug = 0;
@@ -43,6 +46,7 @@ GetOptions(
   "help!"        => \$helpMenu,
   "b!"           => \$probability,
   "probability!" => \$probability,
+  "threads!"     => \$threads,
   "maxthr=i"     => \$maxthr,
   "thrTune=i"    => \$thrTune,
   "debug!"       => \$debug) or
@@ -52,13 +56,18 @@ my $test_file = shift @ARGV;
 my $model_file = shift @ARGV;
 my $output_file = shift @ARGV;
 
-if($helpMenu or !$test_file or !$model_file or !$output_file){
-  if(!$test_file or !$model_file or !$output_file){ print STDERR "\n[31m"; }
-  if(!$helpMenu and !$test_file){ print STDERR "No test_file specified.\n"; }
-  if(!$helpMenu and !$model_file){ print STDERR "No model_file specified.\n"; }
-  if(!$helpMenu and !$output_file){ print STDERR "No output_file specified.\n"; }
-  if(!$test_file or !$model_file or !$output_file){ print STDERR "[0m\n"; }
+if($helpMenu){
   if($debug){print STDERR $REVISIONS;}
+  print STDERR $help;
+  exit;
+}
+
+if(!$test_file or !$model_file or !$output_file){
+  print STDERR "\n[31m";
+  if(!$test_file){ print STDERR "No test_file specified.\n"; }
+  if(!$model_file){ print STDERR "No model_file specified.\n"; }
+  if(!$output_file){ print STDERR "No output_file specified.\n"; }
+  print STDERR "[0m\n";
   print STDERR $help;
   exit;
 }
@@ -67,15 +76,16 @@ open my $out, '>'.$output_file or die "Unable to open output_file $output_file.\
 
 # Main Functional
 my %config;
+$config{'threads'} = $threads;
 $config{'probability'} = $probability;
 $config{'debug'} = $debug if $debug;
 
 # Init the model
-my $model = new ML::SVM::Model({'debug' => $debug});
+my $model = new Algorithm::ML::SVM::Model({'debug' => $debug});
 $model->loadFile($model_file);
 
 # Predict the output
-my $svm = new ML::SVM(\%config);
+my $svm = new Algorithm::ML::SVM(\%config);
 $svm->predictFile($out,$test_file,$model);
 
 exit;

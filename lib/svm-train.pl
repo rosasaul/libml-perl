@@ -5,12 +5,17 @@ my $VERSION = 0;
 
 my $REVISIONS = '
 0 Initial File
+1 Added -save and -merge options
 ';
+
+BEGIN{unshift @INC,"/home/srosa/perl";} #Adding local dir
 
 # Use Functions
 use strict;
-use ML::SVM;
+use Algorithm::ML::SVM;
 use Getopt::Long;
+use threads;
+use threads::shared;
 
 my $help = "svm-train v$VERSION libsvm compatible perl native training CL tool
 
@@ -19,13 +24,13 @@ USAGE:
 
 OPTIONS:
 -help,h          Print this help menu
--svm,s           Set type of SVM (default C-SVC)
+-svm,s           Set type of SVM (default c_svc)
   0,c_svc      : Regularized support vector classification (standard algorithm)
   1,nu_svc     : Automatically regularized support vector classification
   2,one_class  : Select a hyper-sphere to maximize density
   3,epsilon_svr: Support vector regression robust to small (epsilon) errors
   4,nu_svr     : Support vector regression automatically minimize epsilon
--kernel,t        Set type of kernel function (default radial)
+-kernel,t        Set type of kernel function (default rbf)
   0,linear     : u'*v
   1,polynomial : (gamma*u'*v + coef0)^degree
   2,rbf        : exp(-gamma*|u-v|^2)
@@ -42,6 +47,9 @@ OPTIONS:
 -weight,w        Set the parameter C of class i to weight*C, for C-SVC (default 1)
                  Usage : -w i:C -w i:C ...
 -n_fold,v        n-fold cross validation mode
+-save            define save log, saves original vectors used for model SVs, or
+                 when training is killed with Cntrl-C
+-merge           merge in a defined save file, -merge File1 -merge File2...
 -quiet,q         No outputs
 -threads         Disable/Enable threads, usage -nothreads/-threads (default Enabled)
 -maxthr          Maximum concurrent thread count, default 2x Cores
@@ -69,12 +77,15 @@ my $shrinking = 1;
 my $probability = 0;
 my @weights;
 my $n_fold;
+my $save_file;
+my @merge_files;
 my $quiet;
 my $threads = 1;
 my $maxthr;
 my $thrTune;
 my $debug = 0;
 my $debug_time = 0;
+my $trm :shared;
 
 GetOptions(
   "help!"        => \$helpMenu,
@@ -102,6 +113,8 @@ GetOptions(
   "n_fold=i"     => \$n_fold,
   "v=i"          => \$n_fold,
   "threads!"     => \$threads,
+  "save=s"       => \$save_file,
+  "merge=s"      => \@merge_files,
   "quiet!"       => \$quiet,
   "maxthr=i"     => \$maxthr,
   "thrTune=i"    => \$thrTune,
@@ -113,14 +126,19 @@ my $training_set_file = shift @ARGV;
 my $model_file;
 $model_file = shift @ARGV if @ARGV;
 
-if($helpMenu or !$training_set_file){
-  if(!$helpMenu and !$training_set_file){
-    print STDERR "\n[31mNo training_set_file specified.[0m\n\n";
-  }
+if($helpMenu){
   if($debug){print STDERR $REVISIONS;}
   print STDERR $help;
   exit;
 }
+elsif(!$training_set_file){
+  print STDERR "\n[31mNo training_set_file specified.[0m\n\n";
+  print STDERR $help;
+  exit;
+}
+
+#TODO enable this
+#if($save_file){ $SIG{INT} = sub { $trm = 1; }; }
 
 ## Main Functional ##
 # Correct the name if decimal is picked
@@ -160,7 +178,7 @@ if(!defined($SVM_TYPES{$svm_type})){
 else{ $svm_type = $SVM_TYPES{$svm_type}; }
 
 # Define Model
-my $model = new ML::SVM::Model();
+my $model = new Algorithm::ML::SVM::Model({'compress' => 1});
 
 # Set Configs
 $model->set_svm_type($svm_type) if defined $svm_type;
@@ -183,7 +201,7 @@ foreach my $weight (@weights){
   my ($label,$value) = split(/:/,$weight);
   $config{'weights'}{$label} = $value;
 }
-
+$config{'trm'} = \$trm;
 $config{'quiet'} = $quiet if $quiet;
 $config{'threads'} = $threads if $threads;
 $config{'maxthreads'} = $maxthr if $maxthr;
@@ -192,18 +210,17 @@ $config{'debug'} = $debug if $debug;
 $config{'debug_time'} = $debug_time if $debug_time;
 
 # Setup SVM
-my $svm = new ML::SVM(\%config);
+my $svm = new Algorithm::ML::SVM(\%config);
 
 # Read in Problem
 if($debug){ print STDERR "DBG: Read Problem\n"; }
-$svm->read_problem_file($model,$training_set_file);
+$svm->read_problem_file($model,$training_set_file,@merge_files);
 
 # Preform Training or Cross Validation
 if($n_fold){ cross_validation($svm,$training_set_file); }
 else{
   if($debug){ print STDERR "DBG: Train on Model File\n"; }
-  $svm->train($model);
-  #TODO Do it this way to cut Memory -> $svm->trainFile($training_set_file);
+  $svm->train($model,$save_file);
   if($debug){ print STDERR "DBG: Save Model File\n"; }
   if($model_file){ $model->saveFile($model_file); }
 }
@@ -239,10 +256,8 @@ sub cross_validation {
     )."\n";
   }
   else{
-#    print STDERR "num_test_vectors $num_test_vectors\n";
     for(my $i = 0; $i < $num_test_vectors; $i++){
       if($target[$i] eq $proby[$i]){ $total_correct++; }
-#      print STDERR "i $i target[i] $target[$i] proby[i] $proby[$i] total_correct $total_correct\n";
     }
     print STDERR "Cross Validation Accuracy = ".(100 * $total_correct / $num_test_vectors)."\n";
   }

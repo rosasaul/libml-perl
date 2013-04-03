@@ -7,9 +7,11 @@ my $REVISIONS = '
 0 Initial File
 ';
 
+BEGIN{unshift @INC,"/home/srosa/perl";} #Adding local dir
+
 # Use Functions
 use strict;
-use ML::SVM::Scale;
+use Algorithm::ML::SVM::Scale;
 use Getopt::Long;
 
 my $help = "svm-scale v$VERSION libsvm compatible perl native scaling CL tool
@@ -79,7 +81,7 @@ $config{'yupper'} = $y[1] if @y;
 $config{'maxthreads'} = $maxthr if defined($maxthr);
 $config{'thrTune'} = $thrTune if defined($thrTune);
 $config{'debug'} = $debug if $debug;
-my $scale = new ML::SVM::Scale(\%config);
+my $scale = new Algorithm::ML::SVM::Scale(\%config);
 
 # Restore a scaling file if defined
 $scale->restore($restore) if $restore;
