@@ -6,16 +6,16 @@ use Test;
 BEGIN { plan tests => 1 };
 #########################
 print "Load libml-perl Modules.\n";
-use ML::SVM;
-use ML::SVM::Model;
+use Algorithm::ML::SVM;
+use Algorithm::ML::SVM::Model;
 ok(1);
 #########################
 print "Creating new SVM.\n";
-my $svm = new ML::SVM();
+my $svm = new Algorithm::ML::SVM();
 ok(ref($svm) ne "", 1);
 #########################
 print "Creating new ML::SVM::Model.\n";
-my $model = new ML::SVM::Model();
+my $model = new Algorithm::ML::SVM::Model();
 ok(ref($model) ne "", 1);
 #########################
 print "Read in a1a.model.\n";
@@ -27,11 +27,11 @@ $svm->predictFile('a1a.pedicted','a1a',$model);
 ok(1);
 #########################
 print "Create New Model file.\n";
-my $model_b = new ML::SVM::Model();
+my $model_b = new Algorithm::ML::SVM::Model();
 ok(ref($model_b) ne "", 1);
 #########################
 print "Create New SVM.\n";
-my $svm_b = new ML::SVM();
+my $svm_b = new Algorithm::ML::SVM();
 ok(ref($svm_b) ne "", 1);
 #########################
 print "Load Test Set.\n";
