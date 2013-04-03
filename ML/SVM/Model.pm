@@ -3,6 +3,7 @@
 # This is free software, and you are welcome to redistribute it
 # under certain conditions; see LICENSE.txt for details.
 
+use warnings;
 package Algorithm::ML::SVM::Model;
 
 our $VERSION = '0';
@@ -115,7 +116,7 @@ sub loadFile {
     elsif(/probB (.*)/){ my @probB = split(/\s+/,$1); $self->{'probB'} = \@probB; }
     elsif(/SV/){
       my $row;
-      while(<FH>){ chomp;
+      while(<$fh>){ chomp;
         my @sv = split(/\s+/);
         for(my $class = 0; $class < $self->{'param'}{'nr_class'} - 1; $class++){
           $self->{'sv_coef'}[$row][$class] = shift @sv;

@@ -6,12 +6,13 @@
 package Algorithm::ML::SVM;
 
 use strict;
-#use warnings;
+use warnings;
 
 BEGIN{unshift @INC,"/home/srosa/perl" if caller;} #Adding local dir
 
 use Math::Trig;
 use Algorithm::ML::SVM::Model;
+use Memoize;
 use threads;
 
 our $VERSION = '1';
@@ -699,6 +700,7 @@ sub set_types{
   elsif($kernel_type eq 'sigmoid'){ *_kernel = \&_kernel_sigmoid; }
   elsif($kernel_type eq 'precomputed'){ *_kernel = \&_kernel_precomputed; }
   else{ die "Could not identify kernel type $kernel_type\n"; }
+#  memoize('_kernel');
 
   if($svm_type eq 'one_class'){ *get_Q = \&get_Q_one_class; }
   elsif($svm_type eq 'c_svc' or $svm_type eq 'nu_svc'){ *get_Q = \&get_Q_svc; }
@@ -1279,8 +1281,9 @@ sub get_Q_svc{
   my ($self,$keySet,$i,$gamma,$coef0,$degree,$y) = @_;
   if(defined($self->{'Q'}{$i})){ return @{ $self->{'Q'}{$i} }; }
   my @Q;
+  my $count = $self->{'problem'}{'count'};
   my $xSet = $self->{'problem'}{'x'}[$i];
-  for(my $j=0; $j < $self->{'problem'}{'count'}; $j++){
+  for(my $j=0; $j < $count; $j++){
     $Q[$j] = $$y[$i] * $$y[$j] * 
     _kernel($keySet,$xSet,$self->{'problem'}{'x'}[$j],$gamma,$coef0,$degree);
   }
@@ -1654,15 +1657,6 @@ sub _process_problem_file {
     $self->{'problem'}{'count'}++;
   }
   close $fh;
-}
-
-sub add_vector {
-  my ($self,$y,$xSet) = @_;
-  my $row = $self->{'problem'}{'count'};
-  $self->{'problem'}{'y'}[$row] = $y;
-  $self->{'problem'}{'x'}[$row] = $xSet;
-  $self->{'problem'}{'count'}++;
-
 }
 
 sub save_problem_file {
